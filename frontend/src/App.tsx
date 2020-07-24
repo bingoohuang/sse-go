@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import "./App.css";
 
 import { useBufferedState } from "./useBufferedState";
@@ -29,10 +29,10 @@ function App() {
 
   const sendRequest = async (method: string) => {
     await fetch(`${url}/log`, {
-      body: method != "GET" ? Math.random().toString() : null,
+      body: method !== "GET" ? Math.random().toString() : null,
       method
     })
-  } 
+  }
 
   return (
     <div className="App">

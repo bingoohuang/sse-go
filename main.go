@@ -3,23 +3,26 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 )
 
-var mutex = new(sync.Mutex)
+var (
+	mutex      = new(sync.Mutex)
+	sseChannel SSEChannel
+)
 
-// SSEChannel model
+// SSEChannel model.
 type SSEChannel struct {
 	Clients  []chan string
 	Notifier chan string
 }
 
-var sseChannel SSEChannel
-
 func main() {
-	fmt.Println("SSE-GO")
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
+	log.Println("SSE-GO")
 
 	sseChannel = SSEChannel{
 		Clients:  make([]chan string, 0),
@@ -32,10 +35,11 @@ func main() {
 	go broadcaster(done)
 
 	http.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		h := w.Header()
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("Cache-Control", "no-cache")
+		h.Set("Connection", "keep-alive")
+		h.Set("Access-Control-Allow-Origin", "*")
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -44,13 +48,14 @@ func main() {
 		}
 
 		sseChan := make(chan string)
+		mutex.Lock()
 		sseChannel.Clients = append(sseChannel.Clients, sseChan)
+		mutex.Unlock()
 
-		// this go routine reads and streams into the
-		// channel
+		// this go routine reads and streams into the channel
 		d := make(chan interface{})
 		defer close(d)
-		defer fmt.Println("Closing channel.")
+		defer log.Println("Closing channel.")
 
 		for {
 			select {
@@ -58,42 +63,47 @@ func main() {
 				close(sseChan)
 				return
 			case data := <-sseChan:
-				fmt.Printf("data: %v \n\n", data)
+				log.Printf("data: %v", data)
 				fmt.Fprintf(w, "data: %v \n\n", data)
 				flusher.Flush()
 			}
 		}
-
 	})
 
 	http.HandleFunc("/log", logHTTPRequest)
 
-	fmt.Println("Listening to 5000")
-	http.ListenAndServe(":5000", nil)
+	log.Println("Listening to 5000")
+	if err := http.ListenAndServe(":5000", nil); err != nil {
+		log.Panicf("failed to listen on 5000: %v", err)
+	}
 }
 
 func logHTTPRequest(w http.ResponseWriter, r *http.Request) {
 	buf := new(strings.Builder)
 	if _, err := io.Copy(buf, r.Body); err != nil {
-		fmt.Printf("Error: %v", err)
+		log.Printf("Error: %v", err)
 	}
 	method := r.Method
 
 	logMsg := fmt.Sprintf("Method: %v, Body: %v", method, buf.String())
-	fmt.Println(logMsg)
+	log.Println(logMsg)
+
 	sseChannel.Notifier <- logMsg
 }
 
 func broadcaster(done <-chan interface{}) {
-	fmt.Println("Broadcaster Started.")
+	log.Println("Broadcaster Started.")
+
 	for {
 		select {
 		case <-done:
 			return
 		case data := <-sseChannel.Notifier:
+			mutex.Lock()
 			for _, channel := range sseChannel.Clients {
 				channel <- data
 			}
+			mutex.Unlock()
 		}
 	}
 }
